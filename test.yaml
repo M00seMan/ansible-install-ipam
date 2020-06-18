@@ -1,0 +1,138 @@
+- name: Install PHPipam on CentOS 7
+  hosts: all
+  become: yes
+  vars:
+    packagesList:
+      - httpd
+      - mariadb-server
+      - php
+      - php-cli
+      - php-common
+      - php-ldap
+      - php-pdo
+      - php-pear
+      - php-snmp
+      - php-xml
+      - php-mysql
+      - php-mbstring
+      - epel-release
+      - php-mcrypt
+      - git
+      - python-pip
+      - php-gd
+      - MySQL-python
+      - python3
+      - python3-pip
+
+  tasks:
+    - name: Install packages
+      package:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ packagesList }}"
+ 
+    - name: Upgrade pip
+      pip:
+        name: pip
+        state: latest
+
+    - name: Update pexpect
+      package:
+        name: pexpect
+        state: absent
+
+    - pip:
+        name: pexpect
+        state: latest
+
+    - name: Copy httpd config
+      template:
+        src: httpd.conf.j2
+        dest: /etc/httpd/conf/httpd.conf
+        owner: root
+        group: root
+        mode: '777'
+
+    - name: Start httpd
+      service:
+        name: httpd
+        state: started
+
+    - name: Restart httpd if already started
+      service:
+        name: httpd
+        state: restarted
+      ignore_errors: yes
+
+    - name: Start mariadb
+      service:
+        name: mariadb
+        state: started
+
+    - name: Start mariaDB on boot
+      raw: sudo chkconfig mariadb on
+
+    - name: "Secure MariaDB"
+      expect:
+        command: /bin/mysql_secure_installation
+        responses:
+          'Enter current password for root \(enter for none\): ': ''
+          'Set root password\? \[Y\/n\] ': 'n'
+          'Remove anonymous users\? \[Y\/n\] ': 'y'
+          'Disallow root login remotely\? \[Y\/n\] ': 'y'
+          'Remove test database and access to it\? \[Y\/n\] ': 'y'
+          'Reload privilege tables now\? \[Y\/n\] ': 'y'
+        echo: yes
+
+    - name: Delete already existing files from /var/www/html/
+      raw: rm -rf /var/www/html/*
+      ignore_errors: yes
+
+    - name: Create working directory for git
+      raw: mkdir /var/www/html/ipam
+
+    - name: Download IPAM files from git
+      raw: chdir=/var/www/html/ git clone https://github.com/phpipam/phpipam.git /var/www/html/ipam/ 
+
+    - name: Change user to apache
+      raw: sudo chown apache:apache -R /var/www/html/ipam/ 
+      
+    - name: Change security context
+      raw: sudo chcon -t httpd_sys_content_t -R /var/www/html/ipam/
+
+    - command: chdir=/var/www/html/ipam/ find . -type f -exec chmod 0644 {} \; 
+
+    - command: chdir=/var/www/html/ipam/ find . -type d -exec chmod 0755 {} \;
+
+    - command: chdir=/var/www/html/ipam/ sudo chcon -t httpd_sys_rw_content_t app/admin/import-export/upload/ -R
+
+    - command: chdir=/var/www/html/ipam/ sudo chcon -t httpd_sys_rw_content_t app/subnets/import-subnet/upload/ -R
+    
+    - command: chdir=/var/www/html/ipam/ sudo chcon -t httpd_sys_rw_content_t css/images/logo/ -R
+
+    - name: Copy config to folder
+      command: chdir=/var/www/html/ipam/ cp config.dist.php config.php
+
+    - name: Copy files to root dir
+      raw: mv /var/www/html/ipam/* /var/www/html/
+
+    - name: Copy config
+      template:
+        src: config.php.j2
+        dest: /var/www/html/config.php
+
+    - name: Remove firewall
+      package:
+        name: firewalld
+        state: absent
+
+    - name: Restart httpd again
+      service:
+        name: httpd
+        state: restarted
+        
+    - name: Enable httpd startup on boot
+      command: systemctl enable httpd
+
+    - name: Enable Network Scanning
+      command: setenforce 0
